@@ -1,3 +1,4 @@
+
 from flask import Blueprint, request, jsonify
 from werkzeug.security import generate_password_hash, check_password_hash
 from config.database import DatabaseConfig
@@ -27,16 +28,20 @@ def register():
     name = data.get('name')
     username = data.get('username')
     password = data.get('password')
-    specialty = data.get('specialty')
+    specialty = data.get('specialty', '')
 
     logging.debug(f"Register request: name={name}, username={username}, specialty={specialty}")
 
     # Validate inputs
     if not all([name, username, password]):
-        return jsonify({"message": "Missing name, username, or password"}), 400
+        response = {"message": "Missing name, username, or password"}
+        logging.debug(f"Register response: {json.dumps(response)}")
+        return jsonify(response), 400
     
     if specialty and specialty not in ALLOWED_SPECIALTIES:
-        return jsonify({"message": f"Invalid specialty. Must be one of: {', '.join(ALLOWED_SPECIALTIES)}"}), 400
+        response = {"message": f"Invalid specialty. Must be one of: {', '.join(ALLOWED_SPECIALTIES)}"}
+        logging.debug(f"Register response: {json.dumps(response)}")
+        return jsonify(response), 400
 
     try:
         conn = DatabaseConfig.get_connection()
@@ -45,7 +50,9 @@ def register():
         cursor.execute("SELECT id FROM users WHERE username = %s", (username,))
         if cursor.fetchone():
             conn.close()
-            return jsonify({"message": "Username already taken"}), 400
+            response = {"message": "Username already taken"}
+            logging.debug(f"Register response: {json.dumps(response)}")
+            return jsonify(response), 400
 
         hashed_password = generate_password_hash(password, method='pbkdf2:sha256')
         sql = "INSERT INTO users (name, username, password, specialty) VALUES (%s, %s, %s, %s)"
@@ -53,11 +60,14 @@ def register():
         conn.commit()
         conn.close()
         
-        return jsonify({"username": username, "name": name, "specialty": specialty or ""}), 201
+        response = {"username": username, "name": name, "specialty": specialty}
+        logging.debug(f"Register response: {json.dumps(response)}")
+        return jsonify(response), 201
     
     except Exception as e:
-        logging.error(f"Registration error: {str(e)}")
-        return jsonify({"message": f"Registration failed: {str(e)}"}), 500
+        response = {"message": f"Registration failed: {str(e)}"}
+        logging.error(f"Registration error: {str(e)}, Response: {json.dumps(response)}")
+        return jsonify(response), 500
 
 @android_api_bp.route('/login', methods=['POST'])
 @cross_origin()
@@ -66,8 +76,12 @@ def login():
     username = data.get('username')
     password = data.get('password')
 
+    logging.debug(f"Login request: username={username}")
+
     if not all([username, password]):
-        return jsonify({"message": "Missing username or password"}), 400
+        response = {"message": "Missing username or password"}
+        logging.debug(f"Login response: {json.dumps(response)}")
+        return jsonify(response), 400
 
     try:
         conn = DatabaseConfig.get_connection()
@@ -77,12 +91,18 @@ def login():
         conn.close()
 
         if user and check_password_hash(user[2], password):
-            return jsonify({"id": user[0], "username": user[1], "name": user[3], "message": "Login successful"}), 200
+            response = {"id": str(user[0]), "username": user[1], "name": user[3], "message": "Login successful"}
+            logging.debug(f"Login response: {json.dumps(response)}")
+            return jsonify(response), 200
         else:
-            jsonify({"message": "Invalid username or password"}), 401
+            response = {"message": "Invalid username or password"}
+            logging.debug(f"Login response: {json.dumps(response)}")
+            return jsonify(response), 401
 
     except Exception as e:
-        return jsonify({"message": f"Login failed: {str(e)}"}), 500
+        response = {"message": f"Login failed: {str(e)}"}
+        logging.error(f"Login error: {str(e)}, Response: {json.dumps(response)}")
+        return jsonify(response), 500
 
 @android_api_bp.route('/records/<user_id>', methods=['GET'])
 @cross_origin()
@@ -102,7 +122,7 @@ def get_records(user_id):
         predictions = [
             {
                 "id": record[0],
-                "user_id": record[1],
+                "user_id": str(record[1]),  # Convert INT to string
                 "username": record[5],
                 "prediction_data": record[2],
                 "timestamp": record[3].isoformat(),
@@ -110,11 +130,47 @@ def get_records(user_id):
             } for record in records
         ]
         
+        logging.debug(f"Get records response: {json.dumps(predictions)}")
         return jsonify(predictions), 200
 
     except Exception as e:
-        logging.error(f"Records fetch error: {str(e)}")
-        return jsonify({"message": f"Failed to fetch records: {str(e)}"}), 500
+        response = {"message": f"Failed to fetch records: {str(e)}"}
+        logging.error(f"Records fetch error: {str(e)}, Response: {json.dumps(response)}")
+        return jsonify(response), 500
+
+@android_api_bp.route('/records/all', methods=['GET'])
+@cross_origin()
+def get_all_records():
+    try:
+        conn = DatabaseConfig.get_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT p.id, p.user_id, p.prediction_data, p.timestamp, p.model_type, u.username
+            FROM predictions p
+            JOIN users u ON p.user_id = u.id
+            ORDER BY p.timestamp
+        """)
+        records = cursor.fetchall()
+        conn.close()
+
+        predictions = [
+            {
+                "id": record[0],
+                "user_id": str(record[1]),  # Convert INT to string
+                "username": record[5],
+                "prediction_data": record[2],
+                "timestamp": record[3].isoformat(),
+                "model_type": record[4]
+            } for record in records
+        ]
+        
+        logging.debug(f"Get all records response: {json.dumps(predictions)}")
+        return jsonify(predictions), 200
+
+    except Exception as e:
+        response = {"message": f"Failed to fetch all records: {str(e)}"}
+        logging.error(f"Get all records error: {str(e)}, Response: {json.dumps(response)}")
+        return jsonify(response), 500
 
 @android_api_bp.route('/predict', methods=['POST'])
 @cross_origin()
@@ -179,7 +235,9 @@ def predict():
             cluster = prediction['cluster']
             risk_level = prediction['risk_level']
         else:
-            return jsonify({"message": "Invalid model_type: must be 'Cluster' or 'Neural Network'"}), 400
+            response = {"message": "Invalid model_type: must be 'Cluster' or 'Neural Network'"}
+            logging.debug(f"Predict response: {json.dumps(response)}")
+            return jsonify(response), 400
 
         # Create prediction data
         prediction_data = {
@@ -198,8 +256,10 @@ def predict():
         conn.commit()
         conn.close()
 
+        logging.debug(f"Predict response: {json.dumps(prediction_data)}")
         return jsonify(prediction_data), 200
 
     except Exception as e:
-        logging.error(f"Prediction error: {str(e)}")
-        return jsonify({"message": f"Prediction failed: {str(e)}"}), 500
+        response = {"message": f"Prediction failed: {str(e)}"}
+        logging.error(f"Prediction error: {str(e)}, Response: {json.dumps(response)}")
+        return jsonify(response), 500
